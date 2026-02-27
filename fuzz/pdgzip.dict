@@ -1,0 +1,54 @@
+# libFuzzer/AFL++ dictionary for pdgzip.  Mixes format magic and a
+# handful of common byte patterns from real gzip streams.
+
+# gzip magic + deflate method
+"\x1f\x8b\x08"
+
+# gzip flag bytes we care about: FTEXT, FHCRC, FEXTRA, FNAME, FCOMMENT
+"\x00"
+"\x01"
+"\x02"
+"\x04"
+"\x08"
+"\x10"
+"\x1f"
+
+# zero MTIME + XFL + OS
+"\x00\x00\x00\x00\x00\xff"
+
+# small FNAME
+"f\x00"
+"file.txt\x00"
+
+# FEXTRA length=0
+"\x00\x00"
+
+# deflate stored block header bits: BTYPE=00, both non-final and final
+"\x00"
+"\x01"
+# plus a zero-length stored block (non-final): 00 00 00 ff ff
+"\x00\x00\x00\xff\xff"
+# final zero-length stored
+"\x01\x00\x00\xff\xff"
+
+# fixed-huff block header bit patterns (BTYPE=01)
+"\x02"
+"\x03"
+
+# dynamic-huff block header bit patterns (BTYPE=10) (low bits)
+"\x04"
+"\x05"
+
+# common code-length repeat opcodes 16/17/18
+"\x10"
+"\x11"
+"\x12"
+
+# trivial deflate: empty final stored + trailer-length prefix
+"\x03\x00"
+
+# CRC + ISIZE for empty stream
+"\x00\x00\x00\x00\x00\x00\x00\x00"
+
+# short "Hello" at level 1 (for anchoring)
+"\xf3\x48\xcd\xc9\xc9\x07\x00"

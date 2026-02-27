@@ -53,3 +53,12 @@ dkms.conf
 
 # debug information files
 *.dwo
+
+# fuzzing artifacts
+fuzz/build/
+fuzz/crash-*
+fuzz/leak-*
+fuzz/oom-*
+fuzz/timeout-*
+fuzz/artifact-*
+fuzz/slow-unit-*
