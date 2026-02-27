@@ -4,3 +4,4 @@ gzip-compatible compressor in under 1000loc released to the public domain. corre
 - implements a shoddy algorithm for huffman code length-limiting per the rfc to handle edge cases in compression.
 - lazy rabin-karp (hash chain) matcher with nice/good lengths.
 - produces files that could have plausibly been produced by gzip/zlib.
+- fuzzed via afl for segfaults/incompatibilities with gzip.
