@@ -128,7 +128,6 @@ static inline uint64_t br_peek(const bitreader_t * br, int n) {
 
 static inline void br_drop(bitreader_t * br, int n) {
   br->bits >>= n;  br->nbits -= n;
-  if (br->nbits < 0) br->nbits = 0;
 }
 
 static inline uint64_t br_read(bitreader_t * br, int n) {
@@ -553,39 +552,88 @@ static int64_t gz_decompress(pdgzip_t * gz, void * dst, size_t n) {
     case S_DECODE: {
       uint32_t wpos  = gz->wpos, total = gz->total;
       uint8_t * window = gz->window;
-      while (written < n && gz->state == S_DECODE) {
+      bitreader_t * br = &gz->br;
+      for (;;) {
         if (wpos >= WINDOW_SIZE * 2) {
           gz->crc = crc32_update(gz->crc_tab, gz->crc,
                                  window + WINDOW_SIZE, WINDOW_SIZE);
           pdgzip_memcpy(window, window + WINDOW_SIZE, WINDOW_SIZE);
           wpos = WINDOW_SIZE;
         }
-        int sym = huff_decode(&gz->br, gz->ht_lit);
-        if (sym >= 0 && sym < 256) {
-          uint8_t b = (uint8_t)sym;
-          out[written++] = window[wpos++] = b;
+        if (written >= n) break;
+        int sym = huff_decode(br, gz->ht_lit);
+        if ((unsigned)sym < 256u) {
+          out[written++] = window[wpos++] = (uint8_t)sym;
           total++;
-        } else if (sym == 256) {
+          continue;
+        }
+        if (sym == 256) {
           gz->state = gz->bfinal ? S_TRAILER : S_BLOCK_HDR;
-        } else if (sym < 257 || sym > 285) {
-          /*  Covers sym < 0 and the 256 < sym < 257 gap (vacuous, but
-              written this way so static analysers can narrow `li`
-              into [0, 28] without heuristics.)  */
+          break;
+        }
+        if ((unsigned)sym > 285u) {
           gz->wpos = wpos; gz->total = total;
           gz->state = S_ERROR;  gz->err = PDGZIP_E_FORMAT;  return gz->err;
-        } else {
-          unsigned li = (unsigned)sym - 257u;   /*  bounded: 0..28  */
-          gz->match_len = (uint16_t)(len_base[li] +
-            (uint16_t)br_read(&gz->br, len_extra[li]));
-          int di = huff_decode(&gz->br, gz->ht_dist);
-          if (di < 0 || di >= 30) {
-            gz->wpos = wpos; gz->total = total;
-            gz->state = S_ERROR;  gz->err = PDGZIP_E_FORMAT;  return gz->err;
+        }
+        unsigned li = (unsigned)sym - 257u;   /*  bounded: 0..28  */
+        unsigned mlen = (unsigned)len_base[li] +
+                        (unsigned)br_read(br, len_extra[li]);
+        int di = huff_decode(br, gz->ht_dist);
+        if ((unsigned)di >= 30u) {
+          gz->wpos = wpos; gz->total = total;
+          gz->state = S_ERROR;  gz->err = PDGZIP_E_FORMAT;  return gz->err;
+        }
+        unsigned mdist = (unsigned)dist_base[di] +
+                         (unsigned)br_read(br, dist_extra[di]);
+
+        /*  Fast path: the entire match (<= 258 bytes) fits in the
+            remaining output and current window semispace, with no
+            self-overlap.  This is the common case and skips the
+            S_MATCH dispatch and per-iteration bounds checks.  */
+        size_t buf_space = n - written;
+        size_t win_space = WINDOW_SIZE * 2 - wpos;
+        if (mlen <= buf_space && mlen <= win_space && mdist >= mlen) {
+          pdgzip_memcpy(window + wpos, window + wpos - mdist, mlen);
+          pdgzip_memcpy(out + written, window + wpos, mlen);
+          wpos += mlen; written += mlen; total += mlen;
+          continue;
+        }
+        /*  Slow path: split across window edge / output edge / overlap.  */
+        unsigned mpos = 0;
+        while (mpos < mlen) {
+          if (wpos >= WINDOW_SIZE * 2) {
+            gz->crc = crc32_update(gz->crc_tab, gz->crc,
+                                   window + WINDOW_SIZE, WINDOW_SIZE);
+            pdgzip_memcpy(window, window + WINDOW_SIZE, WINDOW_SIZE);
+            wpos = WINDOW_SIZE;
           }
-          gz->match_dist = dist_base[di] +
-            (uint16_t)br_read(&gz->br, dist_extra[di]);
-          gz->match_pos = 0;
-          gz->state = S_MATCH;
+          size_t chunk = mlen - mpos;
+          if (chunk > n - written) chunk = n - written;
+          if (chunk > WINDOW_SIZE * 2 - wpos) chunk = WINDOW_SIZE * 2 - wpos;
+          if (chunk == 0) {
+            /*  Caller's output buffer is full mid-match; resume via
+                S_MATCH on the next pdgzip_read call.  */
+            gz->wpos = wpos; gz->total = total;
+            gz->match_len  = (uint16_t)mlen;
+            gz->match_dist = (uint16_t)mdist;
+            gz->match_pos  = (uint16_t)mpos;
+            gz->state = S_MATCH;
+            return (int64_t)written;
+          }
+          if (mdist >= chunk) {
+            pdgzip_memcpy(window + wpos, window + wpos - mdist, chunk);
+            pdgzip_memcpy(out + written, window + wpos, chunk);
+          } else {
+            for (size_t i = 0; i < chunk; i++) {
+              uint8_t b = window[wpos + i - mdist];
+              window[wpos + i] = b;
+              out[written + i] = b;
+            }
+          }
+          wpos += (uint32_t)chunk;
+          written += chunk;
+          total += (uint32_t)chunk;
+          mpos += (unsigned)chunk;
         }
       }
       gz->wpos  = wpos;

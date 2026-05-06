@@ -24,7 +24,7 @@ pdgzip is a reasonably fast gzip decoder. we have a couple of tricks up our slee
 comparisons:
 - size: tinf ~2.5kb x86 code, pdgzip ~15kb x86 code, zlib ~22kb of x86 code.
 - code volume: tinf 639 sloc, pdgzip 596 sloc, zlib >=10k sloc, libdeflate >=7.7k sloc.
-- performance (r7 pro 7840u; enwik8 100MB): tinf ~2.3s, this ~334.7 ms, zlib-gz ~417.7 ms.
+- performance (r7 pro 7840u; enwik8 100MB): tinf ~2.3s, this ~313.4 ms, zlib-gz ~417.7 ms.
 
 extras:
 - fuzzed with afl++ for ub and compliance with zlib, passes cppcheck.
