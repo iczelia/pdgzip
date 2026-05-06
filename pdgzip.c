@@ -394,6 +394,8 @@ static int parse_gz_header(pdgzip_t * gz) {
   if (method != GZ_METHOD_DEFLATE)
     return -1;
   uint8_t flags = hdr_byte(gz, &hcrc);
+  /*  RFC 1952: bits 5..7 of FLG are reserved and MUST be zero.  */
+  if (flags & 0xE0) return -1;
   for (int i = 0; i < 6; i++)
     (void)hdr_byte(gz, &hcrc); /*  timestamp, xflags, OS  */
   if (flags & FEXTRA) {
