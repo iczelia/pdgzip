@@ -88,7 +88,29 @@ static int br_refill_buf(bitreader_t * br) {
   return got > 0;
 }
 
+/*  Detect little-endian for the 64-bit bulk refill fast path.  On
+    big-endian we just fall back to the byte loop.  */
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+  #define PDGZIP_LE 1
+#else
+  #define PDGZIP_LE 0
+#endif
+
 static inline void br_need(bitreader_t * br, int n) {
+  if (br->nbits >= n) return;
+#if PDGZIP_LE
+  /*  Bulk path: pull 8 bytes at once, advance up to 7 bytes worth of
+      input.  Costs one unaligned 64-bit load per ~7 bits decoded.  */
+  if (br->buf_pos + 8 <= br->buf_end) {
+    uint64_t v;
+    pdgzip_memcpy(&v, &br->buf[br->buf_pos], 8);
+    br->bits |= v << br->nbits;
+    int adv = (63 - br->nbits) >> 3;
+    br->buf_pos += adv;
+    br->nbits   += adv << 3;
+    if (br->nbits >= n) return;
+  }
+#endif
   while (br->nbits < n) {
     if (br->buf_pos >= br->buf_end) {
       if (!br_refill_buf(br)) {
@@ -133,10 +155,10 @@ static inline uint32_t br_read_u32(bitreader_t * br) {
   return v;
 }
 
-/*  CRC-32 decompression code, slicing-by-4.  The 4 KiB table lives in the
+/*  CRC-32 decompression code, slicing-by-8.  The 8 KiB table lives in the
     per-stream scratch so the decoder holds no global state.  It is
     initialized once per pdgzip_init.  */
-typedef uint32_t crc_tab_t[4][256];
+typedef uint32_t crc_tab_t[8][256];
 
 static void crc32_init_table(crc_tab_t tab) {
   for (uint32_t i = 0; i < 256; i++) {
@@ -147,7 +169,7 @@ static void crc32_init_table(crc_tab_t tab) {
   }
   for (uint32_t i = 0; i < 256; i++) {
     uint32_t c = tab[0][i];
-    for (int k = 1; k < 4; k++) {
+    for (int k = 1; k < 8; k++) {
       c = tab[0][c & 0xFF] ^ (c >> 8);
       tab[k][i] = c;
     }
@@ -156,13 +178,19 @@ static void crc32_init_table(crc_tab_t tab) {
 
 static uint32_t crc32_update(crc_tab_t tab, uint32_t crc,
                              const uint8_t * data, size_t len) {
-  for (; len >= 4; data += 4, len -= 4) {
-    crc ^= (uint32_t)data[0] | ((uint32_t)data[1] << 8) |
-          ((uint32_t)data[2] << 16) | ((uint32_t)data[3] << 24);
-    crc = tab[3][(crc      ) & 0xFF] ^
-          tab[2][(crc >>  8) & 0xFF] ^
-          tab[1][(crc >> 16) & 0xFF] ^
-          tab[0][(crc >> 24) & 0xFF];
+  for (; len >= 8; data += 8, len -= 8) {
+    uint32_t lo = crc ^ ((uint32_t)data[0] | ((uint32_t)data[1] << 8) |
+                  ((uint32_t)data[2] << 16) | ((uint32_t)data[3] << 24));
+    uint32_t hi = (uint32_t)data[4] | ((uint32_t)data[5] << 8) |
+                  ((uint32_t)data[6] << 16) | ((uint32_t)data[7] << 24);
+    crc = tab[7][(lo      ) & 0xFF] ^
+          tab[6][(lo >>  8) & 0xFF] ^
+          tab[5][(lo >> 16) & 0xFF] ^
+          tab[4][(lo >> 24) & 0xFF] ^
+          tab[3][(hi      ) & 0xFF] ^
+          tab[2][(hi >>  8) & 0xFF] ^
+          tab[1][(hi >> 16) & 0xFF] ^
+          tab[0][(hi >> 24) & 0xFF];
   }
   while (len--)
     crc = tab[0][(crc ^ *data++) & 0xFF] ^ (crc >> 8);
