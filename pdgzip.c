@@ -1,5 +1,5 @@
 /* Fast, embeddable gzip decoder.  Written in 2026 by Kamila Szewczyk.
-   Author E-mail: k@iczelia.net.  License: CC0 Universal.
+   Author E-mail: k@iczelia.net.  License: 0BSD.
    Attribution welcomed but not required.  */
 #include <stdalign.h>
 #include <stddef.h>
