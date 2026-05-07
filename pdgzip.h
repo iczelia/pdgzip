@@ -1,6 +1,6 @@
-/* Fast, embeddable gzip decoder.  Written in 2026 by Kamila Szewczyk.
-   Author E-mail: k@iczelia.net.  License: CC0 Universal.
-   Attribution welcomed but not required.  */
+/*  pdgzip: fast, embeddable gzip decoder.
+    Written in 2026 by Kamila Szewczyk (k@iczelia.net).
+    License: 0BSD.  Attribution welcomed but not required.  */
 #ifndef PDGZIP_H
 #define PDGZIP_H
 
