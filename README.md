@@ -28,7 +28,7 @@ comparisons:
 
 extras:
 - fuzzed with afl++ for ub and compliance with zlib, passes cppcheck.
-- licensed under cc0, use anywhere for any purpose. attribution is
+- licensed under 0bsd, use anywhere for any purpose. attribution is
   appreciated but not required.
 - the code is written in c11, but should be compatible with c99 with
   minor adjustments.
