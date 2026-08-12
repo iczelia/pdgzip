@@ -23,7 +23,7 @@ pdgzip is a reasonably fast gzip decoder. we have a couple of tricks up our slee
 
 comparisons:
 - size: tinf ~2.5kb x86 code, pdgzip ~15kb x86 code, zlib ~22kb of x86 code.
-- code volume: tinf 639 sloc, pdgzip 596 sloc, zlib >=10k sloc, libdeflate >=7.7k sloc.
+- code volume: tinf 639 sloc, pdgzip 630 sloc, zlib >=10k sloc, libdeflate >=7.7k sloc.
 - performance (r7 pro 7840u; enwik8 100MB): tinf ~2.3s, this ~313.4 ms, zlib-gz ~417.7 ms.
 
 extras:
@@ -91,7 +91,6 @@ make libfuzzer-msan # MSAN (decode & huff only; diff needs an MSAN libz)
 make afl            # AFL++ persistent mode
 make repro          # Sanitizer replay binary for crash repros
 make check          # cppcheck static sweep
-make run-short      # 60-second smoke of each harness
 ```
 
 the static sweep runs clean on cppcheck 2.20 with
