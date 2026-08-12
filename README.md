@@ -23,7 +23,7 @@ pdgzip is a reasonably fast gzip decoder. we have a couple of tricks up our slee
 
 comparisons:
 - size: tinf ~2.5kb x86 code, pdgzip ~15kb x86 code, zlib ~22kb of x86 code.
-- code volume: tinf 639 sloc, pdgzip 630 sloc, zlib >=10k sloc, libdeflate >=7.7k sloc.
+- code volume: tinf 639 sloc, pdgzip 590 sloc, zlib >=10k sloc, libdeflate >=7.7k sloc.
 - performance (r7 pro 7840u; enwik8 100MB): tinf ~2.3s, this ~313.4 ms, zlib-gz ~417.7 ms.
 
 extras:
@@ -48,19 +48,27 @@ one of `PDGZIP_E_FORMAT / PDGZIP_E_CHECKSUM / PDGZIP_E_IO`. Enable
 stream.
 
 peak memory is a single caller-owned scratch buffer of
-`pdgzip_state_size()` bytes; about 376 KiB with default tuning
+`pdgzip_state_size()` bytes; about 236 KiB with default tuning
 (`HUFF_BITS` = 9). Raising `HUFF_BITS` shrinks it at a measurable
-decode-speed cost: 9 -> 376 KiB, 10 -> 225 KiB, 11 -> 145 KiB.
+decode-speed cost: 9 -> 236 KiB, 10 -> 168 KiB, 11 -> 140 KiB.
 
 threat model: input is treated as untrusted. we validate:
 - gzip magic, method == deflate, header structure (FEXTRA / FNAME /
   FCOMMENT / FHCRC).
 - FHCRC when the flag is set (low 16 bits of CRC-32 over every
   preceding header byte).
-- huffman code-length tables (kraft's inequality, per-symbol length
-  limits, sub-table capacity).
+- huffman code-length tables (kraft's inequality in both directions:
+  over-subscribed sets and incomplete ones are rejected, the latter
+  except for the lone one-bit code zlib also permits), per-symbol
+  length limits, sub-table capacity.
+- code-length repeats that would run past the end of the length
+  vector.
 - deflate block types; stored-block `~LEN` field; distance/length
   code symbol ranges.
+- back-references reaching further than the member has emitted, which
+  zlib reports as an invalid distance too far back.
+- input ending mid-stream: a truncated member is reported as
+  `PDGZIP_E_IO` rather than decoded as an endless run of literals.
 - trailer CRC-32 over the decompressed output.
 - trailer ISIZE against `total_out mod 2^32` (matches zlib; for
   streams >= 4 GiB this wraps, which is an inherent gzip format
@@ -85,7 +93,6 @@ harnesses:
 
 ```
 cd fuzz
-make corpus         # generate seed corpus
 make libfuzzer      # ASAN + UBSAN + libFuzzer
 make libfuzzer-msan # MSAN (decode & huff only; diff needs an MSAN libz)
 make afl            # AFL++ persistent mode
@@ -93,7 +100,7 @@ make repro          # Sanitizer replay binary for crash repros
 make check          # cppcheck static sweep
 ```
 
-the static sweep runs clean on cppcheck 2.20 with
+the static sweep runs clean on cppcheck 2.21 with
 `--enable=all --std=c11 --inconclusive`. The source builds with zero
 warnings under gcc *and* clang at
 `-std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow
