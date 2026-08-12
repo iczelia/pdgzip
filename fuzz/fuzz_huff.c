@@ -14,10 +14,11 @@ int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
   huff_table_t * ht = aligned_alloc(_Alignof(huff_table_t), sizeof(huff_table_t));
   if (!ht) return 0;
   memset(ht, 0, sizeof(*ht));
-  if (huff_build(ht, lens, count) == 0) {
-    bitreader_t br;  memset(&br, 0, sizeof(br));
-    br.bits  = 0;  br.nbits = 0;  br.src_eof = 1;   /*  already EOF  */
-    for (int i = 0; i < 32; i++) (void)huff_decode(&br, ht);
-  }
+  for (int complete_only = 0; complete_only < 2; complete_only++)
+    if (huff_build(ht, lens, count, complete_only) == 0) {
+      bitreader_t br;  memset(&br, 0, sizeof(br));
+      br.bits  = 0;  br.nbits = 0;  br.src_eof = 1;   /*  already EOF  */
+      for (int i = 0; i < 32; i++) (void)huff_decode(&br, ht);
+    }
   free(ht);  return 0;
 }
