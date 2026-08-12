@@ -12,14 +12,14 @@
   #define pdgzip_memset memset
 #else
   static void * pdgzip_memcpy(void * dst, const void * src, size_t n) {
-    uint8_t * d = (uint8_t *)dst;
-    const uint8_t * s = (const uint8_t *)src;
+    uint8_t * d = (uint8_t *) dst;
+    const uint8_t * s = (const uint8_t *) src;
     for (size_t i = 0; i < n; i++) d[i] = s[i];
     return dst;
   }
   static void * pdgzip_memset(void * dst, int c, size_t n) {
-    unsigned char * p = (unsigned char *)dst;
-    for (size_t i = 0; i < n; i++) p[i] = (unsigned char)c;
+    unsigned char * p = (unsigned char *) dst;
+    for (size_t i = 0; i < n; i++) p[i] = (unsigned char) c;
     return p;
   }
 #endif
@@ -40,6 +40,7 @@
 #define MAX_BITS             15
 
 #define WINDOW_SIZE          32768
+#define WINDOW_END           (WINDOW_SIZE * 2)
 
 /*  Huffman Tables  */
 typedef uint32_t huff_entry_t;
@@ -49,15 +50,17 @@ typedef uint32_t huff_entry_t;
 #define HUFF_REDIRECT(e)     (((e) >> 20) & 1)
 
 static inline huff_entry_t make_entry(uint16_t sym, uint8_t bits) {
-  return (uint32_t)sym | ((uint32_t)bits << 16);
+  return (uint32_t) sym | ((uint32_t) bits << 16);
 }
 
 static inline huff_entry_t make_redirect(uint8_t sub_bits, uint32_t offset) {
-  return (offset & 0xFFFF) | ((uint32_t)(sub_bits & 0xF) << 16) | (1u << 20);
+  return (offset & 0xFFFF) | ((uint32_t) (sub_bits & 0xF) << 16) | (1u << 20);
 }
 
-#define HUFF_CODE_EXTRA      (1 << (MAX_BITS - HUFF_BITS + 1))
-#define HUFF_TAB_MAX         (HUFF_SIZE + HUFF_CODE_EXTRA * MAX_LITLEN_CODES)
+#define HUFF_SUB_TABS        (MAX_LITLEN_CODES < HUFF_SIZE \
+                              ? MAX_LITLEN_CODES : HUFF_SIZE)
+#define HUFF_TAB_MAX         (HUFF_SIZE + \
+                              HUFF_SUB_TABS * (1 << (MAX_BITS - HUFF_BITS)))
 
 typedef struct { huff_entry_t table[HUFF_TAB_MAX];  int used; } huff_table_t;
 
@@ -82,8 +85,8 @@ static void br_init(bitreader_t * br, pdgzip_read_fn fn, void * user) {
 static int br_refill_buf(bitreader_t * br) {
   if (br->src_eof) return 0;
   size_t got = br->read_fn(br->read_user, br->buf, INBUF_SIZE);
-  if (got < INBUF_SIZE) br->src_eof = 1;
-  br->buf_end = (int)got;
+  if (got < INBUF_SIZE) br->src_eof = 1;  else got = INBUF_SIZE;
+  br->buf_end = (int) got;
   br->buf_pos = 0;
   return got > 0;
 }
@@ -113,17 +116,16 @@ static inline void br_need(bitreader_t * br, int n) {
 #endif
   while (br->nbits < n) {
     if (br->buf_pos >= br->buf_end) {
-      if (!br_refill_buf(br)) {
-        br->eof = 1;  br->nbits = 64;  return;
-      }
+      if (!br_refill_buf(br))
+        { br->eof = 1;  br->nbits = 64;  return; }
     }
-    br->bits |= (uint64_t)br->buf[br->buf_pos++] << br->nbits;
+    br->bits |= (uint64_t) br->buf[br->buf_pos++] << br->nbits;
     br->nbits += 8;
   }
 }
 
 static inline uint64_t br_peek(const bitreader_t * br, int n) {
-  return br->bits & (((uint64_t)1 << n) - 1);
+  return br->bits & (((uint64_t) 1 << n) - 1);
 }
 
 static inline void br_drop(bitreader_t * br, int n) {
@@ -144,19 +146,17 @@ static inline void br_align(bitreader_t * br) {
 static inline uint16_t br_read_u16(bitreader_t * br) {
   uint16_t lo = (uint16_t) br_read(br, 8);
   uint16_t hi = (uint16_t) br_read(br, 8);
-  return (uint16_t)(lo | (hi << 8));
+  return (uint16_t) (lo | (hi << 8));
 }
 
 static inline uint32_t br_read_u32(bitreader_t * br) {
   uint32_t v = 0;
   for (int i = 0; i < 4; i++)
-    v |= (uint32_t)br_read(br, 8) << (i * 8);
+    v |= (uint32_t) br_read(br, 8) << (i * 8);
   return v;
 }
 
-/*  CRC-32 decompression code, slicing-by-8.  The 8 KiB table lives in the
-    per-stream scratch so the decoder holds no global state.  It is
-    initialized once per pdgzip_init.  */
+/*  CRC-32 decompression code, slicing-by-8.  */
 typedef uint32_t crc_tab_t[8][256];
 
 static void crc32_init_table(crc_tab_t tab) {
@@ -178,10 +178,10 @@ static void crc32_init_table(crc_tab_t tab) {
 static uint32_t crc32_update(crc_tab_t tab, uint32_t crc,
                              const uint8_t * data, size_t len) {
   for (; len >= 8; data += 8, len -= 8) {
-    uint32_t lo = crc ^ ((uint32_t)data[0] | ((uint32_t)data[1] << 8) |
-                  ((uint32_t)data[2] << 16) | ((uint32_t)data[3] << 24));
-    uint32_t hi = (uint32_t)data[4] | ((uint32_t)data[5] << 8) |
-                  ((uint32_t)data[6] << 16) | ((uint32_t)data[7] << 24);
+    uint32_t lo = crc ^ ((uint32_t) data[0] | ((uint32_t) data[1] << 8) |
+                  ((uint32_t) data[2] << 16) | ((uint32_t) data[3] << 24));
+    uint32_t hi = (uint32_t) data[4] | ((uint32_t) data[5] << 8) |
+                  ((uint32_t) data[6] << 16) | ((uint32_t) data[7] << 24);
     crc = tab[7][(lo      ) & 0xFF] ^
           tab[6][(lo >>  8) & 0xFF] ^
           tab[5][(lo >> 16) & 0xFF] ^
@@ -197,9 +197,17 @@ static uint32_t crc32_update(crc_tab_t tab, uint32_t crc,
 }
 
 /*  Checked Huffman table building, decoder.  */
-static int huff_build(huff_table_t * ht, const uint8_t * lengths, int count) {
+static inline uint16_t huff_reverse(uint16_t code, int len) {
+  uint16_t rev = 0;
+  for (int b = 0; b < len; b++)
+    rev = (uint16_t) (rev | (code >> (len - 1 - b) & 1) << b);
+  return rev;
+}
+
+static int huff_build(huff_table_t * ht, const uint8_t * lengths, int count,
+                      int complete_only) {
   uint16_t bl_count[MAX_BITS + 1] = { 0 }, next_code[MAX_BITS + 1];
-  uint16_t codes[MAX_LITLEN_CODES];
+  uint16_t codes[MAX_LITLEN_CODES] = { 0 };
 
   int max_len = 0;
   for (int i = 0; i < count; i++) {
@@ -211,88 +219,61 @@ static int huff_build(huff_table_t * ht, const uint8_t * lengths, int count) {
 
   uint32_t code = 0;
   for (int bits = 1; bits <= max_len; bits++) {
-    code = (code + bl_count[bits - 1]) << 1;   /* Canonical Codes.  */
-    next_code[bits] = (uint16_t)code;
+    code = (code + bl_count[bits - 1]) << 1;   /*  Canonical Codes.  */
+    next_code[bits] = (uint16_t) code;
   }
-  if (max_len > 0 && code + bl_count[max_len] > (1u << max_len))
-    return -1;  /*  Kraft condition failed.  */
+  if (max_len > 0) {
+    uint32_t span = code + bl_count[max_len];
+    if (span > 1u << max_len) return -1;   /*  Kraft condition failed.  */
+    if (span < 1u << max_len && (complete_only || max_len != 1)) return -1;
+  }
 
-  for (int i = 0; i < count; i++) {
-    if (lengths[i] == 0) continue;
-    codes[i] = next_code[lengths[i]]++;
-  }
+  for (int i = 0; i < count; i++)
+    if (lengths[i]) codes[i] = next_code[lengths[i]]++;
 
   ht->used = HUFF_SIZE;
   pdgzip_memset(ht->table, 0, HUFF_SIZE * sizeof(huff_entry_t));
 
   for (int sym = 0; sym < count; sym++) {
     int len = lengths[sym];
-    if (len == 0) continue;
-
-    if (len <= HUFF_BITS) {
-      uint16_t entry_idx = 0;
-      for (int b = 0; b < len; b++)
-        entry_idx |= ((codes[sym] >> (len - 1 - b)) & 1) << b;
-
-      int step = 1 << len;
-      for (int idx = entry_idx; idx < HUFF_SIZE; idx += step)
-        ht->table[idx] = make_entry((uint16_t)sym, (uint8_t)len);
-    }
+    if (len == 0 || len > HUFF_BITS) continue;
+    int step = 1 << len;
+    for (int idx = huff_reverse(codes[sym], len); idx < HUFF_SIZE; idx += step)
+      ht->table[idx] = make_entry((uint16_t) sym, (uint8_t) len);
   }
 
-  if (max_len > HUFF_BITS) {
-    int sub_bits_needed[HUFF_SIZE];
-    pdgzip_memset(sub_bits_needed, 0, sizeof(sub_bits_needed));
+  if (max_len <= HUFF_BITS) return 0;
 
-    for (int sym = 0; sym < count; sym++) {
-      int len = lengths[sym];
-      if (len <= HUFF_BITS) continue;
-
-      uint16_t rev = 0;
-      for (int b = 0; b < len; b++)
-        rev |= ((codes[sym] >> (len - 1 - b)) & 1) << b;
-
-      int primary = rev & HUFF_MASK, extra = len - HUFF_BITS;
-      if (extra > sub_bits_needed[primary])
-        sub_bits_needed[primary] = extra;
-    }
-
-    int sub_offsets[HUFF_SIZE];
-    pdgzip_memset(sub_offsets, -1, sizeof(sub_offsets));
-
-    for (int p = 0; p < HUFF_SIZE; p++) {
-      if (sub_bits_needed[p] == 0) continue;
-      int sub_sz = 1 << sub_bits_needed[p];
-      if (ht->used + sub_sz > HUFF_TAB_MAX) return -1;
-      sub_offsets[p] = ht->used;
-      pdgzip_memset(&ht->table[ht->used], 0,
-                    (size_t)sub_sz * sizeof(huff_entry_t));
-      ht->table[p] = make_redirect((uint8_t)sub_bits_needed[p],
-                     (uint32_t)ht->used);
-      ht->used += sub_sz;
-    }
-
-    for (int sym = 0; sym < count; sym++) {
-      int len = lengths[sym];
-      if (len <= HUFF_BITS) continue;
-
-      uint16_t rev = 0;
-      for (int b = 0; b < len; b++)
-        rev |= ((codes[sym] >> (len - 1 - b)) & 1) << b;
-
-      int primary = rev & HUFF_MASK, extra_bits = len - HUFF_BITS;
-      int sub_idx = (rev >> HUFF_BITS) & ((1 << sub_bits_needed[primary]) - 1);
-      int off = sub_offsets[primary];
-
-      int step = 1 << extra_bits, sub_sz = 1 << sub_bits_needed[primary];
-      for (int idx = sub_idx; idx < sub_sz; idx += step)
-        ht->table[off + idx] = make_entry((uint16_t)sym, (uint8_t)len);
-    }
+  uint8_t sub_bits[HUFF_SIZE];
+  pdgzip_memset(sub_bits, 0, sizeof sub_bits);
+  for (int sym = 0; sym < count; sym++) {
+    int len = lengths[sym];
+    if (len <= HUFF_BITS) continue;
+    int primary = huff_reverse(codes[sym], len) & HUFF_MASK;
+    if (len - HUFF_BITS > sub_bits[primary])
+      sub_bits[primary] = (uint8_t) (len - HUFF_BITS);
   }
-
+  for (int p = 0; p < HUFF_SIZE; p++) {
+    if (!sub_bits[p]) continue;
+    int sub_sz = 1 << sub_bits[p];
+    if (ht->used + sub_sz > HUFF_TAB_MAX) return -1;
+    pdgzip_memset(&ht->table[ht->used], 0,
+                  (size_t) sub_sz * sizeof(huff_entry_t));
+    ht->table[p] = make_redirect(sub_bits[p], (uint32_t) ht->used);
+    ht->used += sub_sz;
+  }
+  for (int sym = 0; sym < count; sym++) {
+    int len = lengths[sym];
+    if (len <= HUFF_BITS) continue;
+    uint16_t rev = huff_reverse(codes[sym], len);
+    int primary = rev & HUFF_MASK, off = (int) HUFF_SYM(ht->table[primary]);
+    int sub_sz = 1 << sub_bits[primary], step = 1 << (len - HUFF_BITS);
+    for (int idx = (rev >> HUFF_BITS) & (sub_sz - 1);
+         idx < sub_sz; idx += step)
+      ht->table[off + idx] = make_entry((uint16_t) sym, (uint8_t) len);
+  }
   return 0;
 }
-
 
 static inline int huff_decode(bitreader_t * br, const huff_table_t * ht) {
   br_need(br, MAX_BITS);
@@ -300,7 +281,7 @@ static inline int huff_decode(bitreader_t * br, const huff_table_t * ht) {
   huff_entry_t e = ht->table[peek & HUFF_MASK];
   if (HUFF_REDIRECT(e)) {
     uint32_t off = HUFF_SYM(e), sub_bits = HUFF_LEN(e);
-    unsigned idx = (unsigned)((peek >> HUFF_BITS) & ((1u << sub_bits) - 1));
+    unsigned idx = (unsigned) ((peek >> HUFF_BITS) & ((1u << sub_bits) - 1));
     e = ht->table[off + idx];
   }
   int len = HUFF_LEN(e);
@@ -342,27 +323,37 @@ enum {
     the caller's scratch buffer is cast to a pointer to it.  */
 struct pdgzip {
   bitreader_t br;
-  uint8_t window[WINDOW_SIZE * 2];
-  uint32_t wpos, crc, total;
-  int state, err, bfinal, concat;
-  const huff_table_t * ht_lit, * ht_dist;
-  huff_table_t ht_litbuf, ht_distbuf;
+  uint8_t window[WINDOW_END];
+  uint32_t wpos, crc;  uint64_t total;
+  int state, err, bfinal, concat, fixed;
+  huff_table_t ht_lit, ht_dist;
   uint16_t store_remaining, match_len, match_dist, match_pos;
   crc_tab_t crc_tab;
 };
 
-/*  Rebuild the RFC1951 fixed-Huffman tables into the per-stream buffers.
-    Done lazily on each BTYPE=01 block: fixed blocks are rare in modern
-    gzip streams, and this keeps the tables out of .bss entirely.  */
+static int64_t gz_fail(pdgzip_t * gz, int err) {
+  gz->state = S_ERROR;  gz->err = err;  return err;
+}
+
+static inline uint32_t win_wrap(pdgzip_t * gz, uint32_t wpos) {
+  if (wpos < WINDOW_END) return wpos;
+  gz->crc = crc32_update(gz->crc_tab, gz->crc, gz->window + WINDOW_SIZE,
+                         WINDOW_SIZE);
+  pdgzip_memcpy(gz->window, gz->window + WINDOW_SIZE, WINDOW_SIZE);
+  return WINDOW_SIZE;
+}
+
+/*  Rebuild the RFC1951 fixed-Huffman tables into the per-stream buffers.  */
 static void build_fixed_tables(pdgzip_t * gz) {
   uint8_t ll[288], dd[32];  int i;
   for (i =   0; i <= 143; i++) ll[i] = 8;
   for (i = 144; i <= 255; i++) ll[i] = 9;
   for (i = 256; i <= 279; i++) ll[i] = 7;
   for (i = 280; i <= 287; i++) ll[i] = 8;
-  huff_build(&gz->ht_litbuf, ll, 288);
+  huff_build(&gz->ht_lit, ll, 288, 0);
   for (i = 0; i < 32; i++) dd[i] = 5;
-  huff_build(&gz->ht_distbuf, dd, 32);
+  huff_build(&gz->ht_dist, dd, 32, 0);
+  gz->fixed = 1;
 }
 
 /*  Hardened Gzip header handling.  */
@@ -376,9 +367,9 @@ static void build_fixed_tables(pdgzip_t * gz) {
 
 /*  Read one header byte and fold it into the running CRC-32 used for
     FHCRC validation.  The header CRC is the low 16 bits of CRC-32
-    over every header byte preceding the FHCRC field itself.  */
+    over every preceding header byte.  */
 static inline uint8_t hdr_byte(pdgzip_t * gz, uint32_t * hcrc) {
-  uint8_t b = (uint8_t)br_read(&gz->br, 8);
+  uint8_t b = (uint8_t) br_read(&gz->br, 8);
   *hcrc = gz->crc_tab[0][(*hcrc ^ b) & 0xFFu] ^ (*hcrc >> 8);
   return b;
 }
@@ -397,13 +388,13 @@ static int parse_gz_header(pdgzip_t * gz) {
   /*  RFC 1952: bits 5..7 of FLG are reserved and MUST be zero.  */
   if (flags & 0xE0) return -1;
   for (int i = 0; i < 6; i++)
-    (void)hdr_byte(gz, &hcrc); /*  timestamp, xflags, OS  */
+    (void) hdr_byte(gz, &hcrc); /*  timestamp, xflags, OS  */
   if (flags & FEXTRA) {
     uint8_t xlo = hdr_byte(gz, &hcrc);
     uint8_t xhi = hdr_byte(gz, &hcrc);
-    uint16_t xlen = (uint16_t)(xlo | (xhi << 8));
+    uint16_t xlen = (uint16_t) (xlo | (xhi << 8));
     for (uint16_t i = 0; i < xlen; i++)
-      (void)hdr_byte(gz, &hcrc);
+      (void) hdr_byte(gz, &hcrc);
   }
   if (flags & FNAME) {
     while (hdr_byte(gz, &hcrc) != 0 && !br->eof) { }
@@ -414,62 +405,50 @@ static int parse_gz_header(pdgzip_t * gz) {
   if (flags & FHCRC) {
     /*  The FHCRC field itself is *not* fed into hcrc.  */
     uint16_t got  = br_read_u16(br);
-    uint16_t want = (uint16_t)((hcrc ^ 0xFFFFFFFFu) & 0xFFFFu);
+    uint16_t want = (uint16_t) ((hcrc ^ 0xFFFFFFFFu) & 0xFFFFu);
     if (got != want) return -1;
   }
   return br->eof ? -1 : 0;
 }
 
 /*  Gzip format table parser.  */
-static const int cl_order[MAX_CL_CODES] = {
+static const uint8_t cl_order[MAX_CL_CODES] = {
   16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15
 };
 
 /*  Build the dynamic Huffman tables.  The code-length (CL) table is a
-    transient scratch buffer -- we reuse `ht_distbuf` for it since the
-    final distance table is built last, after we're done with the CL
-    table.  This keeps the decoder's memory footprint to two huff_tables
-    instead of three.  */
+    transient scratch buffer: we reuse `ht_dist` for it since the final
+    distance table is built last, after we're done with the CL table.  */
 static int build_dynamic_tables(pdgzip_t * gz) {
   bitreader_t * br = &gz->br;
-  int hlit  = (int)br_read(br, 5) + 257;
-  int hdist = (int)br_read(br, 5) + 1;
-  int hclen = (int)br_read(br, 4) + 4;
+  int hlit  = (int) br_read(br, 5) + 257;
+  int hdist = (int) br_read(br, 5) + 1;
+  int hclen = (int) br_read(br, 4) + 4;
   if (hlit > 286 || hdist > 30) return -1;
-  uint8_t cl_lengths[MAX_CL_CODES] = {0};
+  uint8_t cl_lengths[MAX_CL_CODES] = { 0 };
   for (int i = 0; i < hclen; i++)
-    cl_lengths[cl_order[i]] = (uint8_t)br_read(br, 3);
-  huff_table_t * ht_cl = &gz->ht_distbuf;  /*  scratch - reused below  */
-  if (huff_build(ht_cl, cl_lengths, MAX_CL_CODES) < 0) return -1;
+    cl_lengths[cl_order[i]] = (uint8_t) br_read(br, 3);
+  huff_table_t * ht_cl = &gz->ht_dist;  /*  scratch - reused below  */
+  if (huff_build(ht_cl, cl_lengths, MAX_CL_CODES, 1) < 0) return -1;
   int total = hlit + hdist, idx = 0;
   uint8_t all_lengths[MAX_LITLEN_CODES + MAX_DIST_CODES] = { 0 };
   while (idx < total) {
     int sym = huff_decode(br, ht_cl);
     if (sym < 0) return -1;
-    if (sym < 16) {
-      all_lengths[idx++] = (uint8_t)sym;
-    } else if (sym == 16) {
+    if (sym < 16) { all_lengths[idx++] = (uint8_t) sym;  continue; }
+    int rep;  uint8_t fill = 0;
+    if (sym == 16) {
       if (idx == 0) return -1;
-      int rep = (int)br_read(br, 2) + 3;
-      uint8_t prev = all_lengths[idx - 1];
-      for (int i = 0; i < rep && idx < total; i++)
-        all_lengths[idx++] = prev;
-    } else if (sym == 17) {
-      int rep = (int)br_read(br, 3) + 3;
-      for (int i = 0; i < rep && idx < total; i++)
-        all_lengths[idx++] = 0;
-    } else if (sym == 18) {
-      int rep = (int)br_read(br, 7) + 11;
-      for (int i = 0; i < rep && idx < total; i++)
-        all_lengths[idx++] = 0;
-    } else {
-      return -1;
-    }
+      rep = (int) br_read(br, 2) + 3;  fill = all_lengths[idx - 1];
+    } else if (sym == 17) rep = (int) br_read(br, 3) + 3;
+    else rep = (int) br_read(br, 7) + 11;
+    if (idx + rep > total) return -1;
+    while (rep--) all_lengths[idx++] = fill;
   }
-  if (huff_build(&gz->ht_litbuf, all_lengths, hlit) < 0) return -1;
-  if (huff_build(&gz->ht_distbuf, all_lengths + hlit, hdist) < 0) return -1;
-  gz->ht_lit  = &gz->ht_litbuf;
-  gz->ht_dist = &gz->ht_distbuf;
+  if (br->eof) return -1;
+  if (huff_build(&gz->ht_lit, all_lengths, hlit, 0) < 0) return -1;
+  if (huff_build(&gz->ht_dist, all_lengths + hlit, hdist, 0) < 0) return -1;
+  gz->fixed = 0;
   return 0;
 }
 
@@ -481,32 +460,23 @@ static int64_t gz_decompress(pdgzip_t * gz, void * dst, size_t n) {
   while (written < n) {
     switch (gz->state) {
     case S_HEADER:
-      if (parse_gz_header(gz) < 0) {
-        gz->state = S_ERROR;
-        gz->err = gz->br.eof ? PDGZIP_E_IO : PDGZIP_E_FORMAT;
-        return gz->err;
-      }
+      if (parse_gz_header(gz) < 0)
+        return gz_fail(gz, gz->br.eof ? PDGZIP_E_IO : PDGZIP_E_FORMAT);
       gz->state = S_BLOCK_HDR;
       break;
 
     case S_BLOCK_HDR: {
-      gz->bfinal = (int)br_read(&gz->br, 1);
-      int btype  = (int)br_read(&gz->br, 2);
+      gz->bfinal = (int) br_read(&gz->br, 1);
+      int btype  = (int) br_read(&gz->br, 2);
+      if (gz->br.eof) return gz_fail(gz, PDGZIP_E_IO);
       switch (btype) {
-      case 0:
-        gz->state = S_STORED_HDR;
-        break;
+      case 0:  gz->state = S_STORED_HDR;   break;
+      case 2:  gz->state = S_DYNAMIC_HDR;  break;
       case 1:
-        build_fixed_tables(gz);
-        gz->ht_lit  = &gz->ht_litbuf;
-        gz->ht_dist = &gz->ht_distbuf;
-        gz->state   = S_DECODE;
+        if (!gz->fixed) build_fixed_tables(gz);
+        gz->state = S_DECODE;
         break;
-      case 2:
-        gz->state = S_DYNAMIC_HDR;
-        break;
-      default:
-        gz->state = S_ERROR;  gz->err = PDGZIP_E_FORMAT;  return gz->err;
+      default: return gz_fail(gz, PDGZIP_E_FORMAT);
       }
       break;
     }
@@ -515,23 +485,18 @@ static int64_t gz_decompress(pdgzip_t * gz, void * dst, size_t n) {
       br_align(&gz->br);
       uint16_t len  = br_read_u16(&gz->br);
       uint16_t nlen = br_read_u16(&gz->br);
-      if (len != (uint16_t)~nlen) {
-        gz->state = S_ERROR;  gz->err = PDGZIP_E_FORMAT;  return gz->err;
-      }
+      if (gz->br.eof) return gz_fail(gz, PDGZIP_E_IO);
+      if (len != (uint16_t) ~nlen) return gz_fail(gz, PDGZIP_E_FORMAT);
       gz->store_remaining = len;
       gz->state = S_STORED_DATA;
       break;
     }
 
-    case S_STORED_DATA: {
+    case S_STORED_DATA:
       while (gz->store_remaining > 0 && written < n) {
-        if (gz->wpos >= WINDOW_SIZE * 2) {
-          gz->crc = crc32_update(gz->crc_tab, gz->crc,
-                                 gz->window + WINDOW_SIZE, WINDOW_SIZE);
-          pdgzip_memcpy(gz->window, gz->window + WINDOW_SIZE, WINDOW_SIZE);
-          gz->wpos = WINDOW_SIZE;
-        }
-        uint8_t b = (uint8_t)br_read(&gz->br, 8);
+        gz->wpos = win_wrap(gz, gz->wpos);
+        uint8_t b = (uint8_t) br_read(&gz->br, 8);
+        if (gz->br.eof) return gz_fail(gz, PDGZIP_E_IO);
         out[written++] = b;
         gz->window[gz->wpos++] = b;
         gz->total++;
@@ -540,32 +505,26 @@ static int64_t gz_decompress(pdgzip_t * gz, void * dst, size_t n) {
       if (gz->store_remaining == 0)
         gz->state = gz->bfinal ? S_TRAILER : S_BLOCK_HDR;
       break;
-    }
 
     case S_DYNAMIC_HDR:
-      if (build_dynamic_tables(gz) < 0) {
-        gz->state = S_ERROR;
-        gz->err = gz->br.eof ? PDGZIP_E_IO : PDGZIP_E_FORMAT;
-        return gz->err;
-      }
+      if (build_dynamic_tables(gz) < 0)
+        return gz_fail(gz, gz->br.eof ? PDGZIP_E_IO : PDGZIP_E_FORMAT);
       gz->state = S_DECODE;
       break;
 
     case S_DECODE: {
-      uint32_t wpos  = gz->wpos, total = gz->total;
+      uint32_t wpos = gz->wpos;  uint64_t total = gz->total;
       uint8_t * window = gz->window;
       bitreader_t * br = &gz->br;
+      #define BAIL(e) do { gz->wpos = wpos;  gz->total = total;            \
+                           return gz_fail(gz, e); } while (0)
       for (;;) {
-        if (wpos >= WINDOW_SIZE * 2) {
-          gz->crc = crc32_update(gz->crc_tab, gz->crc,
-                                 window + WINDOW_SIZE, WINDOW_SIZE);
-          pdgzip_memcpy(window, window + WINDOW_SIZE, WINDOW_SIZE);
-          wpos = WINDOW_SIZE;
-        }
+        wpos = win_wrap(gz, wpos);
         if (written >= n) break;
-        int sym = huff_decode(br, gz->ht_lit);
-        if ((unsigned)sym < 256u) {
-          out[written++] = window[wpos++] = (uint8_t)sym;
+        int sym = huff_decode(br, &gz->ht_lit);
+        if (br->eof) BAIL(PDGZIP_E_IO);
+        if ((unsigned) sym < 256u) {
+          out[written++] = window[wpos++] = (uint8_t) sym;
           total++;
           continue;
         }
@@ -573,54 +532,45 @@ static int64_t gz_decompress(pdgzip_t * gz, void * dst, size_t n) {
           gz->state = gz->bfinal ? S_TRAILER : S_BLOCK_HDR;
           break;
         }
-        if ((unsigned)sym > 285u) {
-          gz->wpos = wpos; gz->total = total;
-          gz->state = S_ERROR;  gz->err = PDGZIP_E_FORMAT;  return gz->err;
-        }
-        unsigned li = (unsigned)sym - 257u;   /*  bounded: 0..28  */
-        unsigned mlen = (unsigned)len_base[li] +
-                        (unsigned)br_read(br, len_extra[li]);
-        int di = huff_decode(br, gz->ht_dist);
-        if ((unsigned)di >= 30u) {
-          gz->wpos = wpos; gz->total = total;
-          gz->state = S_ERROR;  gz->err = PDGZIP_E_FORMAT;  return gz->err;
-        }
-        unsigned mdist = (unsigned)dist_base[di] +
-                         (unsigned)br_read(br, dist_extra[di]);
+        if ((unsigned) sym > 285u) BAIL(PDGZIP_E_FORMAT);
+        unsigned li = (unsigned) sym - 257u;   /*  bounded: 0..28  */
+        unsigned mlen = (unsigned) len_base[li] +
+                        (unsigned) br_read(br, len_extra[li]);
+        int di = huff_decode(br, &gz->ht_dist);
+        if ((unsigned) di >= 30u) BAIL(PDGZIP_E_FORMAT);
+        unsigned mdist = (unsigned) dist_base[di] +
+                         (unsigned) br_read(br, dist_extra[di]);
+        if (br->eof) BAIL(PDGZIP_E_IO);
+        if (mdist > total) BAIL(PDGZIP_E_FORMAT);
 
         /*  Fast path: the entire match (<= 258 bytes) fits in the
             remaining output and current window semispace, with no
             self-overlap.  This is the common case and skips the
             S_MATCH dispatch and per-iteration bounds checks.  */
         size_t buf_space = n - written;
-        size_t win_space = WINDOW_SIZE * 2 - wpos;
+        size_t win_space = WINDOW_END - wpos;
         if (mlen <= buf_space && mlen <= win_space && mdist >= mlen) {
           pdgzip_memcpy(window + wpos, window + wpos - mdist, mlen);
           pdgzip_memcpy(out + written, window + wpos, mlen);
-          wpos += mlen; written += mlen; total += mlen;
+          wpos += mlen;  written += mlen;  total += mlen;
           continue;
         }
         /*  Slow path: split across window edge / output edge / overlap.  */
         unsigned mpos = 0;
         while (mpos < mlen) {
-          if (wpos >= WINDOW_SIZE * 2) {
-            gz->crc = crc32_update(gz->crc_tab, gz->crc,
-                                   window + WINDOW_SIZE, WINDOW_SIZE);
-            pdgzip_memcpy(window, window + WINDOW_SIZE, WINDOW_SIZE);
-            wpos = WINDOW_SIZE;
-          }
+          wpos = win_wrap(gz, wpos);
           size_t chunk = mlen - mpos;
           if (chunk > n - written) chunk = n - written;
-          if (chunk > WINDOW_SIZE * 2 - wpos) chunk = WINDOW_SIZE * 2 - wpos;
+          if (chunk > WINDOW_END - wpos) chunk = WINDOW_END - wpos;
           if (chunk == 0) {
             /*  Caller's output buffer is full mid-match; resume via
                 S_MATCH on the next pdgzip_read call.  */
-            gz->wpos = wpos; gz->total = total;
-            gz->match_len  = (uint16_t)mlen;
-            gz->match_dist = (uint16_t)mdist;
-            gz->match_pos  = (uint16_t)mpos;
+            gz->wpos = wpos;  gz->total = total;
+            gz->match_len  = (uint16_t) mlen;
+            gz->match_dist = (uint16_t) mdist;
+            gz->match_pos  = (uint16_t) mpos;
             gz->state = S_MATCH;
-            return (int64_t)written;
+            return (int64_t) written;
           }
           if (mdist >= chunk) {
             pdgzip_memcpy(window + wpos, window + wpos - mdist, chunk);
@@ -632,39 +582,35 @@ static int64_t gz_decompress(pdgzip_t * gz, void * dst, size_t n) {
               out[written + i] = b;
             }
           }
-          wpos += (uint32_t)chunk;
+          wpos += (uint32_t) chunk;
           written += chunk;
-          total += (uint32_t)chunk;
-          mpos += (unsigned)chunk;
+          total += chunk;
+          mpos += (unsigned) chunk;
         }
       }
+      #undef BAIL
       gz->wpos  = wpos;
       gz->total = total;
       break;
     }
 
     case S_MATCH: {
-      uint32_t wpos  = gz->wpos, total = gz->total;
+      uint32_t wpos = gz->wpos;  uint64_t total = gz->total;
       uint8_t * window = gz->window;
       uint16_t dist = gz->match_dist;
       while (gz->match_pos < gz->match_len && written < n) {
-        if (wpos >= WINDOW_SIZE * 2) {
-          gz->crc = crc32_update(gz->crc_tab, gz->crc,
-                                 window + WINDOW_SIZE, WINDOW_SIZE);
-          pdgzip_memcpy(window, window + WINDOW_SIZE, WINDOW_SIZE);
-          wpos = WINDOW_SIZE;
-        }
-        size_t remaining = gz->match_len - gz->match_pos, chunk = remaining;
-        size_t buf_space = n - written,  win_space = WINDOW_SIZE * 2 - wpos;
+        wpos = win_wrap(gz, wpos);
+        size_t chunk = gz->match_len - gz->match_pos;
+        size_t buf_space = n - written,  win_space = WINDOW_END - wpos;
         if (chunk > buf_space) chunk = buf_space;
         if (chunk > win_space) chunk = win_space;
         if (dist >= chunk) {
           pdgzip_memcpy(window + wpos, window + wpos - dist, chunk);
           pdgzip_memcpy(out + written, window + wpos, chunk);
-          wpos += (uint32_t)chunk;
+          wpos += (uint32_t) chunk;
           written += chunk;
-          total += (uint32_t)chunk;
-          gz->match_pos += (uint16_t)chunk;
+          total += chunk;
+          gz->match_pos += (uint16_t) chunk;
         } else {
           uint8_t b = window[wpos - dist];
           out[written++] = window[wpos++] = b;
@@ -687,23 +633,19 @@ static int64_t gz_decompress(pdgzip_t * gz, void * dst, size_t n) {
       br_align(&gz->br);
       uint32_t exp_crc   = br_read_u32(&gz->br);
       uint32_t exp_isize = br_read_u32(&gz->br);
-      if (gz->br.eof) {
-        gz->state = S_ERROR;  gz->err = PDGZIP_E_IO;  return gz->err;
-      }
-      if ((gz->crc ^ 0xFFFFFFFFu) != exp_crc) {
-        gz->state = S_ERROR;  gz->err = PDGZIP_E_CHECKSUM;  return gz->err;
-      }
+      if (gz->br.eof) return gz_fail(gz, PDGZIP_E_IO);
+      if ((gz->crc ^ 0xFFFFFFFFu) != exp_crc)
+        return gz_fail(gz, PDGZIP_E_CHECKSUM);
       /*  ISIZE is the low 32 bits of the decompressed size.  CRC32
           already catches corruption for any stream, so for streams
           < 4 GiB this is strictly redundant.  At or above 4 GiB the
           value is modular and carries no additional bits of truth
-          beyond what the writer chose to encode -- but validating
+          beyond what the writer chose to encode, but validating
           (total & 0xFFFFFFFF) against it is still sound on any
           conforming stream and matches zlib's behaviour, which the
           differential fuzzer depends on.  */
-      if ((uint32_t)(gz->total & 0xFFFFFFFFu) != exp_isize) {
-        gz->state = S_ERROR;  gz->err = PDGZIP_E_CHECKSUM;  return gz->err;
-      }
+      if ((uint32_t) gz->total != exp_isize)
+        return gz_fail(gz, PDGZIP_E_CHECKSUM);
       if (gz->concat) {
         /*  Probe for another member.  br_need() sets br->eof when the
             source callback has no more bytes.  If more bytes are
@@ -730,12 +672,11 @@ static int64_t gz_decompress(pdgzip_t * gz, void * dst, size_t n) {
 
     case S_DONE:  return (int64_t) written;
     case S_ERROR: return gz->err;
-    default:
-      gz->state = S_ERROR;  gz->err = PDGZIP_E_FORMAT;  return gz->err;
+    default:      return gz_fail(gz, PDGZIP_E_FORMAT);
     }
   }
 
-  return (int64_t)written;
+  return (int64_t) written;
 }
 
 /*  Public API.  */
@@ -745,7 +686,7 @@ size_t pdgzip_state_align(void) { return alignof(struct pdgzip); }
 pdgzip_t * pdgzip_init(void * scratch, const pdgzip_cfg_t * cfg) {
   if (!scratch || !cfg || !cfg->read) return NULL;
   pdgzip_t * gz = scratch;
-  pdgzip_memset(gz, 0, sizeof(*gz));
+  pdgzip_memset(gz, 0, sizeof *gz);
   br_init(&gz->br, cfg->read, cfg->user);
   gz->wpos   = WINDOW_SIZE;   /*  Semi-space streaming decoding.  */
   gz->crc    = 0xFFFFFFFFu;
@@ -760,10 +701,11 @@ int64_t pdgzip_read(pdgzip_t * gz, void * buf, size_t n) {
   if (!gz) return PDGZIP_E_FORMAT;
   if (gz->state == S_ERROR) return gz->err;
   if (n == 0) return 0;
+  if (!buf) return gz_fail(gz, PDGZIP_E_FORMAT);
   return gz_decompress(gz, buf, n);
 }
 
 /*  The peak memory usage of this (fast) Gzip decoder is roughly
-    pdgzip_state_size() bytes per stream (~385 KiB with default tuning).
+    pdgzip_state_size() bytes per stream (~236 KiB with default tuning).
     This can be reduced by increasing HUFF_BITS from 9 at a small
-    decode-speed cost: 9 -> 385 KiB, 10 -> ~225 KiB, 11 -> ~145 KiB.  */
+    decode-speed cost: 9 -> 236 KiB, 10 -> ~168 KiB, 11 -> ~140 KiB.  */
